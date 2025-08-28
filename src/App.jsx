@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { BookOpen, Home, Timer, ArrowLeft, ArrowRight, ListX, History, RefreshCcw } from "lucide-react";
 
-const STORAGE_KEY = "ka-qa-bank-v6";
+const STORAGE_KEY = "ka-qa-bank-v7";
 
 /** ------------------------------------
  *  Frågebank – 100 frågor
@@ -254,12 +254,13 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  /* --- rätta allt (MCQ poängsätts, Case/Kort till sammanfattning) --- */
+  /* --- resultathistorik helper --- */
   const appendResult = (entry) => {
     const stamp = new Date().toISOString();
     setApp(s => ({ ...s, results: [{ ...entry, stamp }, ...s.results].slice(0, 50) }));
   };
 
+  /* --- rätta allt (MCQ poängsätts, Case/Kort till sammanfattning) --- */
   const gradeAll = () => {
     if (app.quiz.type !== "mcq") {
       // För case/short – gå till sammanfattning och visa jämförelse
@@ -374,6 +375,8 @@ export default function App() {
             app={app}
             setApp={setApp}
             gradeAll={gradeAll}
+            regrade={regrade}
+            finishAndExit={finishAndExit}
           />
         )}
 
@@ -492,53 +495,59 @@ function Overview({ app, counts, startQuizFor, quizProgress, setApp }) {
       </div>
 
       {/* RESULTAT-historik */}
-      <div className="rounded-2xl border border-slate-200 p-5 bg-white">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-base font-semibold flex items-center gap-2"><History className="w-4 h-4" /> Resultat</h3>
-        </div>
-        {app.results.length===0 ? (
-          <p className="text-sm text-slate-600 mt-2">Inga slutförda prov ännu.</p>
-        ) : (
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-sm border border-slate-200 rounded-xl overflow-hidden">
-              <thead className="bg-slate-50">
-                <tr className="text-left">
-                  <th className="px-3 py-2">Datum</th>
-                  <th className="px-3 py-2">Typ</th>
-                  <th className="px-3 py-2">Antal</th>
-                  <th className="px-3 py-2">Besvarade</th>
-                  <th className="px-3 py-2">Rätt</th>
-                  <th className="px-3 py-2">Fel</th>
-                  <th className="px-3 py-2">% rätt</th>
-                </tr>
-              </thead>
-              <tbody>
-                {app.results.map((r, i) => {
-                  const d = new Date(r.stamp);
-                  const dateStr = `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}`;
-                  return (
-                    <tr key={i} className="border-t">
-                      <td className="px-3 py-2 whitespace-nowrap">{dateStr}</td>
-                      <td className="px-3 py-2 uppercase">{r.type}</td>
-                      <td className="px-3 py-2">{r.size}</td>
-                      <td className="px-3 py-2">{r.answered ?? "-"}</td>
-                      <td className="px-3 py-2">{r.right ?? "-"}</td>
-                      <td className="px-3 py-2">{r.wrong ?? "-"}</td>
-                      <td className="px-3 py-2">{r.percent !== null && r.percent !== undefined ? `${r.percent}%` : "-"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      <ResultsTable results={app.results} />
     </motion.div>
   );
 }
 
+function ResultsTable({ results }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 p-5 bg-white">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-base font-semibold flex items-center gap-2"><History className="w-4 h-4" /> Resultat</h3>
+      </div>
+      {results.length===0 ? (
+        <p className="text-sm text-slate-600 mt-2">Inga slutförda prov ännu.</p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-sm border border-slate-200 rounded-xl overflow-hidden">
+            <thead className="bg-slate-50">
+              <tr className="text-left">
+                <th className="px-3 py-2">Datum</th>
+                <th className="px-3 py-2">Typ</th>
+                <th className="px-3 py-2">Antal</th>
+                <th className="px-3 py-2">Besvarade</th>
+                <th className="px-3 py-2">Rätt</th>
+                <th className="px-3 py-2">Fel</th>
+                <th className="px-3 py-2">% rätt</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r, i) => {
+                const d = new Date(r.stamp);
+                const dateStr = `${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"})}`;
+                return (
+                  <tr key={i} className="border-t">
+                    <td className="px-3 py-2 whitespace-nowrap">{dateStr}</td>
+                    <td className="px-3 py-2 uppercase">{r.type}</td>
+                    <td className="px-3 py-2">{r.size}</td>
+                    <td className="px-3 py-2">{r.answered ?? "-"}</td>
+                    <td className="px-3 py-2">{r.right ?? "-"}</td>
+                    <td className="px-3 py-2">{r.wrong ?? "-"}</td>
+                    <td className="px-3 py-2">{r.percent !== null && r.percent !== undefined ? `${r.percent}%` : "-"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------- Quiz: en fråga i taget ---------- */
-function QuizView({ app, setApp, gradeAll }) {
+function QuizView({ app, setApp, gradeAll, regrade, finishAndExit }) {
   const idx = app.quiz.index;
   const total = app.quiz.ids.length;
   const qid = app.quiz.ids[idx];
@@ -564,6 +573,41 @@ function QuizView({ app, setApp, gradeAll }) {
   // Efter rättning: visa facit & resonemang om reveal satts (vid felgenomgång)
   const showAnswer = graded && app.reveal[q.id]?.answer;
   const showReason = graded && app.reveal[q.id]?.reasoning;
+
+  // ----- Felgenomgång: särskild knapp "Rätta och avsluta prov"
+  const showFinishOnReview = app.quiz.reviewingWrongOnly === true;
+
+  // Hjälpare: snabb-rätta & avsluta (används i felgenomgång)
+  const quickRegradeAndFinish = () => {
+    if (app.quiz.type === "mcq") {
+      const incorrect = [];
+      app.quiz.ids.forEach(id => {
+        const qx = ALL_BY_ID.get(id);
+        const pickedX = app.mcqAnswers[id];
+        if (pickedX !== qx.answerIndex) incorrect.push(id);
+      });
+      // Uppdatera graded state + resultat, och gå till översikt
+      setApp(s => ({
+        ...s,
+        mode: "study",
+        results: [
+          { type:"mcq", size: app.quiz.ids.length, answered: app.quiz.ids.filter(id => app.mcqAnswers[id] !== undefined).length, right: app.quiz.ids.length - incorrect.length, wrong: incorrect.length, percent: Math.round(((app.quiz.ids.length - incorrect.length) / app.quiz.ids.length) * 100), stamp: new Date().toISOString() },
+          ...s.results
+        ],
+        quiz: { ...s.quiz, ids: [], index: 0, graded: true, incorrectIds: [], reviewingWrongOnly: false }
+      }));
+    } else {
+      setApp(s => ({
+        ...s,
+        mode: "study",
+        results: [
+          { type: app.quiz.type, size: app.quiz.ids.length, answered: app.quiz.ids.filter(id => (app.textAnswers[id] || "").trim().length > 0).length, right: null, wrong: null, percent: null, stamp: new Date().toISOString() },
+          ...s.results
+        ],
+        quiz: { ...s.quiz, ids: [], index: 0, graded: true, incorrectIds: [], reviewingWrongOnly: false }
+      }));
+    }
+  };
 
   return (
     <motion.div initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} className="rounded-2xl shadow-sm border border-slate-200 p-5 bg-white">
@@ -657,6 +701,19 @@ function QuizView({ app, setApp, gradeAll }) {
           </button>
         )}
       </div>
+
+      {/* Extra handlingsknapp vid felgenomgång */}
+      {showFinishOnReview && (
+        <div className="mt-3">
+          <button
+            onClick={quickRegradeAndFinish}
+            className="px-4 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 text-sm"
+            title="Räkna om och avsluta provet"
+          >
+            Rätta och avsluta prov
+          </button>
+        </div>
+      )}
     </motion.div>
   );
 }
