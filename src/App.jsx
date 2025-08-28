@@ -1,13 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { BookOpen, CheckCircle2, Circle, Search, Timer, XCircle, ListX, ArrowLeft, ArrowRight, Home } from "lucide-react";
+import { BookOpen, CheckCircle2, Circle, Search, Timer, ListX, ArrowLeft, ArrowRight, Home, Shuffle } from "lucide-react";
 
-const STORAGE_KEY = "ka-qa-bank-v2";
+const STORAGE_KEY = "ka-qa-bank-v3";
 
 /** ------------------------------------
  *  Frågebank (40 frågor, numrerade)
  *  Grupper: PBL (10), PBF (8), BBR (8), EKS (6), KA & Kontrollplan (6), Blandat (2)
- *  MCQ prioriteras för autogradering; vissa 'short'/'case' ingår för övning.
+ *  MCQ autograderas; 'short'/'case' för övning och prov utan autogradering.
  *  ------------------------------------ */
 const BANK = [
   {
@@ -45,13 +45,13 @@ const BANK = [
     title: "BBR – Boverkets byggregler",
     questions: [
       { id:"Q19", type:"mcq", q:"BBR är främst:", options:["Detaljkrav på material","Funktionskrav med råd","Upphandlingsregler","Planbestämmelser"], answerIndex:1, reasoning:"BBR anger funktionskrav; allmänna råd visar exempel på lösningar." },
-      { id:"Q20", type:"mcq", q:"Vilket avsnitt reglerar energihushållning?", options:["BBR 3","BBR 5","BBR 6","BBR 9"], answerIndex:3, reasoning:"BBR avsnitt 9 rör energi (primärenergatal, isolering, täthet)." },
+      { id:"Q20", type:"mcq", q:"Vilket avsnitt reglerar energihushållning?", options:["BBR 3","BBR 5","BBR 6","BBR 9"], answerIndex:3, reasoning:"BBR avsnitt 9 rör energi (primärenergital, isolering, täthet)." },
       { id:"Q21", type:"mcq", q:"Brandskydd återfinns främst i:", options:["BBR 3","BBR 5","BBR 6","BBR 8"], answerIndex:1, reasoning:"BBR avsnitt 5: brand (utrymning, bärförmåga, avskiljning, installationer)." },
       { id:"Q22", type:"mcq", q:"Tillgänglighet och användbarhet finns i:", options:["BBR 3","BBR 5","BBR 8","BBR 9"], answerIndex:0, reasoning:"BBR avsnitt 3 behandlar bostadsutformning, tillgänglighet, rumshöjder m.m." },
       { id:"Q23", type:"mcq", q:"Radon och luftkvalitet behandlas i:", options:["BBR 6","BBR 8","BBR 9","BBR 5"], answerIndex:0, reasoning:"BBR avsnitt 6: hygien, hälsa och miljö (fukt, ventilation, radon)." },
       { id:"Q24", type:"mcq", q:"Normal rumshöjd i bostäder enligt BBR:", options:["2,0 m","2,2 m","2,4 m","2,7 m"], answerIndex:2, reasoning:"BBR 3:3 anger normalt ≥ 2,4 m i bostadsrum (undantag i vissa utrymmen)." },
       { id:"Q25", type:"mcq", q:"Vilket är ett vanligt riktvärde för U-värde yttervägg småhus?", options:["0,30","0,24","0,18","0,10"], answerIndex:2, reasoning:"BBR 9:2 tabellnivåer/riktvärden – alternativt verifieras via total energiprestanda." },
-      { id:"Q26", type:"case", q:"Förskola med hög ljudnivå – vad utreder KA?", answer:"Ljudklass, installationers ljud, efterklang, otätheter – jämför mot projekterade krav.", reasoning:"BBR avsnitt 7 (buller) tillsammans med funktionskrav i 6 och 3 för god inomhusmiljö." },
+      { id:"Q26", type:"case", q:"Förskola med hög ljudnivå – vad utreder KA?", answer:"Ljudklass, installationers ljud, efterklang, otätheter – jämför mot projekterade krav.", reasoning:"BBR avsnitt 7 (buller) + krav i 6 och 3 för god inomhusmiljö." },
     ]
   },
   {
@@ -88,9 +88,7 @@ const BANK = [
   },
 ];
 
-/** ------------------------------------
- *  Hjälpfunktioner & state
- *  ------------------------------------ */
+/* ---------- hjälp ---------- */
 function flatQuestions() {
   const a = [];
   BANK.forEach(g => g.questions.forEach(q => a.push({ ...q, groupId: g.id, groupTitle: g.title })));
@@ -104,9 +102,7 @@ function useStoredState(defaultValue) {
   const [state, setState] = useState(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return defaultValue;
-      const parsed = JSON.parse(raw);
-      return { ...defaultValue, ...parsed };
+      return raw ? { ...defaultValue, ...JSON.parse(raw) } : defaultValue;
     } catch { return defaultValue; }
   });
   useEffect(() => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {} }, [state]);
@@ -119,20 +115,20 @@ function shuffle(ids) {
   return a;
 }
 
-/** ------------------------------------
- *  App-komponent
- *  ------------------------------------ */
+/* ---------- App ---------- */
 export default function App() {
   const [app, setApp] = useStoredState({
     mode: "study", // "study" | "quiz" | "summary"
     filters: { group: "all", type: "all", query: "" },
-    completed: {},           // id:boolean
-    mcqAnswers: {},          // id:number (index)
-    reveal: {},              // id:{answer:boolean, reasoning:boolean}
+    completed: {},          // id:boolean
+    mcqAnswers: {},         // id:number
+    reveal: {},             // id:{answer,reasoning}
     quiz: {
+      type: "mcq",          // "mcq" | "short" | "case"
+      order: "random",      // "random" | "chronological"
       size: 20,
-      ids: [],               // frågeset i provet
-      index: 0,              // aktuell fråga i prov
+      ids: [],
+      index: 0,
       graded: false,
       incorrectIds: [],
       reviewingWrongOnly: false
@@ -141,7 +137,31 @@ export default function App() {
 
   const groups = BANK.map(g => ({ id: g.id, title: g.title }));
 
-  // Studie-lista (filtrering)
+  /* --- Översikt: totals --- */
+  const totals = useMemo(() => {
+    const total = ALL.length;
+    const done = ALL.filter(q => app.completed[q.id]).length;
+
+    const byGroup = {};
+    BANK.forEach(g => {
+      const items = g.questions;
+      const totalG = items.length;
+      const doneG = items.filter(q => app.completed[q.id]).length;
+      byGroup[g.id] = { total: totalG, done: doneG, pct: totalG? Math.round((doneG/totalG)*100):0 };
+    });
+
+    const byType = ["mcq","short","case"].reduce((acc,t)=>{
+      const list = ALL.filter(q => q.type===t);
+      const totalT = list.length;
+      const doneT = list.filter(q=>app.completed[q.id]).length;
+      acc[t] = { total: totalT, done: doneT, pct: totalT? Math.round((doneT/totalT)*100):0 };
+      return acc;
+    }, {});
+
+    return { total, done, pct: total? Math.round((done/total)*100):0, byGroup, byType };
+  }, [app.completed]);
+
+  /* --- Filter för studielistan --- */
   const filteredStudy = useMemo(() => {
     const { group, type, query } = app.filters;
     const q = query.trim().toLowerCase();
@@ -154,50 +174,54 @@ export default function App() {
     });
   }, [app.filters]);
 
-  const overall = useMemo(() => {
-    const total = ALL.length;
-    const done = ALL.filter(q => app.completed[q.id]).length;
-    const byGroup = {};
-    BANK.forEach(g => {
-      const items = g.questions;
-      const totalG = items.length;
-      const doneG = items.filter(q => app.completed[q.id]).length;
-      byGroup[g.id] = { total: totalG, done: doneG, pct: totalG ? Math.round((doneG/totalG)*100) : 0 };
-    });
-    return { total, done, pct: total? Math.round((done/total)*100):0, byGroup };
-  }, [app.completed]);
-
-  // UI helpers
   const setFilter = (k, v) => setApp(s => ({ ...s, filters: { ...s.filters, [k]: v } }));
   const toggleReveal = (id, key) => setApp(s => ({ ...s, reveal: { ...s.reveal, [id]: { ...(s.reveal[id]||{}), [key]: !(s.reveal[id]?.[key]) } } }));
   const markDone = (id, val=true) => setApp(s => ({ ...s, completed: { ...s.completed, [id]: val } }));
   const answerMcq = (id, idx) => setApp(s => ({ ...s, mcqAnswers: { ...s.mcqAnswers, [id]: idx } }));
 
-  /** ---------- Provläge ---------- */
+  /* --- Starta prov --- */
   const startQuiz = () => {
-    const pool = MCQ_IDS.filter(id => app.filters.group==="all" || ALL_BY_ID.get(id).groupId===app.filters.group);
-    if (pool.length === 0) { alert("Inga flervalsfrågor i det valda filtret."); return; }
-    const size = Math.min(app.quiz.size, pool.length);
-    const ids = shuffle(pool).slice(0, size);
-    // reset reveals for quiz ids
+    // välj baserat på quiz.type + ev. avsnitt i filters.group
+    const pool = ALL.filter(q => {
+      if (app.quiz.type !== "all" && q.type !== app.quiz.type) return false;
+      if (app.filters.group !== "all" && q.groupId !== app.filters.group) return false;
+      return true;
+    });
+    if (pool.length === 0) { alert("Inga frågor matchar valen."); return; }
+
+    // ordning
+    const idsChrono = pool.map(q => q.id); // ALL är redan kronologiskt per BANK-deklarationen
+    const ids = app.quiz.order === "random" ? shuffle(idsChrono) : idsChrono;
+
+    const size = Math.min(app.quiz.size, ids.length);
+    const pickedIds = ids.slice(0, size);
+
     const newReveal = { ...app.reveal };
-    ids.forEach(id => newReveal[id] = { answer:false, reasoning:false });
-    setApp(s => ({ ...s, mode:"quiz", reveal:newReveal, quiz:{ ...s.quiz, ids, index:0, graded:false, incorrectIds:[], reviewingWrongOnly:false } }));
+    pickedIds.forEach(id => newReveal[id] = { answer:false, reasoning:false });
+
+    setApp(s => ({ ...s, mode:"quiz", reveal:newReveal, quiz:{ ...s.quiz, ids:pickedIds, index:0, graded:false, incorrectIds:[], reviewingWrongOnly:false } }));
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
   const quizQ = app.quiz.ids[app.quiz.index] ? ALL_BY_ID.get(app.quiz.ids[app.quiz.index]) : null;
   const goNext = () => setApp(s => ({ ...s, quiz:{ ...s.quiz, index: Math.min(s.quiz.index+1, s.quiz.ids.length-1) } }));
   const goPrev = () => setApp(s => ({ ...s, quiz:{ ...s.quiz, index: Math.max(s.quiz.index-1, 0) } }));
+
   const exitToStudy = () => setApp(s => ({ ...s, mode:"study" }));
 
   const gradeQuiz = () => {
+    if (app.quiz.type !== "mcq") {
+      alert("Det går bara att autogradera flervalsfrågor (MCQ). Använd facit/resonemang för övriga typer.");
+      setApp(s => ({ ...s, mode:"summary", quiz:{ ...s.quiz, graded:true, incorrectIds:[] } }));
+      return;
+    }
     const incorrect = [];
     app.quiz.ids.forEach(id => {
       const q = ALL_BY_ID.get(id);
       const picked = app.mcqAnswers[id];
       if (picked !== q.answerIndex) incorrect.push(id);
     });
-    setApp(s => ({ ...s, mode:"summary", quiz:{ ...s.quiz, graded:true, incorrectIds:incorrect, reviewingWrongOnly:false } }));
+    setApp(s => ({ ...s, mode:"summary", quiz:{ ...s.quiz, graded:true, incorrectIds:incorrect } }));
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -206,7 +230,7 @@ export default function App() {
     const ids = app.quiz.incorrectIds;
     const newReveal = { ...app.reveal };
     ids.forEach(id => newReveal[id] = { answer:true, reasoning:true });
-    setApp(s => ({ ...s, mode:"quiz", reveal:newReveal, quiz:{ ...s.quiz, ids, index:0, graded:true, reviewingWrongOnly:true } }));
+    setApp(s => ({ ...s, mode:"quiz", reveal:newReveal, quiz:{ ...s.quiz, ids, index:0, reviewingWrongOnly:true } }));
   };
 
   const reviewAllAgain = () => {
@@ -216,133 +240,179 @@ export default function App() {
     setApp(s => ({ ...s, mode:"quiz", reveal:newReveal, quiz:{ ...s.quiz, ids, index:0, graded:false, reviewingWrongOnly:false } }));
   };
 
-  /** ---------- Render ---------- */
+  /* ---------- UI ---------- */
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-900">
       <header className="sticky top-0 z-10 backdrop-blur bg-white/70 border-b border-slate-200">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
           <BookOpen className="w-7 h-7" />
-          <h1 className="text-2xl font-semibold">KA Frågebank – Prov & Övning</h1>
-          <div className="ml-auto flex items-center gap-2">
-            <button onClick={()=>setApp(s=>({...s,mode:"study"}))} className={`px-3 py-1.5 rounded-lg border text-sm flex items-center gap-1 ${app.mode==="study"?"border-emerald-300 bg-emerald-50":"border-slate-300"}`}>
-              <Home className="w-4 h-4" /> Översikt
+          <h1 className="text-2xl font-semibold">KA Frågebank – Prov & Översikt</h1>
+          <div className="ml-auto">
+            <button onClick={()=>setApp(s=>({...s,mode:"study"}))} className={`px-3 py-1.5 rounded-lg border text-sm ${app.mode==="study"?"border-emerald-300 bg-emerald-50":"border-slate-300"}`}>
+              <Home className="inline w-4 h-4 mr-1" /> Översikt
             </button>
           </div>
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-6">
-        {app.mode === "study" && <StudyView
-          app={app} setFilter={setFilter} groups={BANK.map(g=>({id:g.id,title:g.title}))}
-          overall={overall} filteredStudy={filteredStudy}
-          toggleReveal={toggleReveal} markDone={markDone}
-          answerMcq={answerMcq} startQuiz={startQuiz}
-          setApp={setApp}
-        />}
+        {app.mode === "study" && (
+          <Overview
+            app={app}
+            groups={groups}
+            totals={totals}
+            filteredStudy={filteredStudy}
+            setFilter={setFilter}
+            setApp={setApp}
+            startQuiz={startQuiz}
+          />
+        )}
 
-        {app.mode === "quiz" && <QuizView
-          app={app} quizQ={quizQ} answerMcq={answerMcq}
-          toggleReveal={toggleReveal} goNext={goNext}
-          goPrev={goPrev} gradeQuiz={gradeQuiz}
-          exitToStudy={exitToStudy}
-        />}
+        {app.mode === "quiz" && (
+          <QuizView
+            app={app}
+            quizQ={quizQ}
+            goNext={goNext}
+            goPrev={goPrev}
+            exitToStudy={exitToStudy}
+            answerMcq={(id, i)=>setApp(s=>({...s, mcqAnswers:{...s.mcqAnswers, [id]:i}}))}
+            toggleReveal={toggleReveal}
+            gradeQuiz={gradeQuiz}
+          />
+        )}
 
-        {app.mode === "summary" && <SummaryView
-          app={app} ALL_BY_ID={ALL_BY_ID}
-          reviewWrong={reviewWrong} reviewAllAgain={reviewAllAgain}
-          exitToStudy={exitToStudy}
-        />}
+        {app.mode === "summary" && (
+          <Summary
+            app={app}
+            reviewWrong={reviewWrong}
+            reviewAllAgain={reviewAllAgain}
+            exitToStudy={exitToStudy}
+          />
+        )}
       </main>
 
       <footer className="max-w-6xl mx-auto px-4 py-10 text-center text-xs text-slate-500">
-        <p>All progress sparas lokalt i denna webbläsare. Publicera via Netlify/Vercel för att dela med andra.</p>
+        <p>Framsteg sparas lokalt i webbläsaren. Deploya via Netlify för att dela.</p>
       </footer>
     </div>
   );
 }
 
-/** ---------- Översikt/Studie-läge ---------- */
-function StudyView({ app, setFilter, groups, overall, filteredStudy, toggleReveal, markDone, answerMcq, startQuiz, setApp }) {
+/* ---------- Översikt (start-sida) ---------- */
+function Overview({ app, groups, totals, filteredStudy, setFilter, setApp, startQuiz }) {
   return (
-    <motion.div initial={{opacity:0,y:8}} animate={{opacity:1,y:0}}>
-      {/* Översiktspanel */}
-      <div className="rounded-2xl shadow-sm border border-slate-200 p-5 bg-white mb-6">
-        <div className="flex flex-col md:flex-row md:items-center gap-4 justify-between">
-          <div>
-            <h2 className="text-xl font-semibold mb-1">Översikt</h2>
-            <p className="text-sm text-slate-600">Klart totalt: {overall.done} / {overall.total} ({overall.pct}%)</p>
-            <div className="mt-3 grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {groups.map(g=>{
-                const gStat = overall.byGroup[g.id];
-                return (
-                  <div key={g.id} className="border border-slate-200 rounded-xl p-3">
-                    <div className="text-sm font-medium">{g.title}</div>
-                    <div className="text-xs text-slate-500">Klart: {gStat.done}/{gStat.total} ({gStat.pct}%)</div>
-                    <div className="mt-2 w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div className="h-full bg-emerald-400" style={{width:`${gStat.pct}%`}}/>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+    <motion.div initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} className="space-y-6">
+      {/* Progress-panel */}
+      <div className="rounded-2xl shadow-sm border border-slate-200 p-5 bg-white">
+        <h2 className="text-xl font-semibold">Översikt</h2>
+        <p className="text-sm text-slate-600">Klart totalt: {totals.done} / {totals.total} ({totals.pct}%)</p>
 
-          {/* Provläge-kort */}
-          <div className="border border-slate-200 rounded-2xl p-4">
-            <div className="text-sm font-medium mb-2">Provläge (flervalsfrågor)</div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <select className="px-3 py-2 rounded-xl border border-slate-300 text-sm"
-                value={app.quiz.size}
-                onChange={e=>setApp(s=>({...s,quiz:{...s.quiz,size:Number(e.target.value)}}))}>
-                {[10,15,20,25,30].map(n=><option key={n} value={n}>{n} frågor</option>)}
-              </select>
-              <button onClick={startQuiz} className="px-4 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 text-sm flex items-center gap-2">
-                <Timer className="w-4 h-4" /> Starta prov
-              </button>
-            </div>
-            <div className="text-xs text-slate-500 mt-2">Provet väljer slumpmässigt bland MCQ inom valt avsnitt.</div>
-          </div>
+        <div className="mt-4 grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {groups.map(g=>{
+            const s = totals.byGroup[g.id];
+            return (
+              <div key={g.id} className="border border-slate-200 rounded-xl p-3">
+                <div className="text-sm font-medium">{g.title}</div>
+                <div className="text-xs text-slate-500">Klart: {s.done}/{s.total} ({s.pct}%)</div>
+                <div className="mt-2 w-full h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-400" style={{width:`${s.pct}%`}}/></div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Översikt per typ */}
+        <div className="mt-5 grid sm:grid-cols-3 gap-3">
+          {["mcq","case","short"].map(t=>{
+            const label = t==="mcq" ? "Flervalsfrågor" : t==="case" ? "Case" : "Kortfrågor";
+            const s = totals.byType[t];
+            return (
+              <div key={t} className="border border-slate-200 rounded-xl p-3">
+                <div className="text-sm font-medium">{label}</div>
+                <div className="text-xs text-slate-500">Klart: {s.done}/{s.total} ({s.pct}%)</div>
+                <div className="mt-2 w-full h-2 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-400" style={{width:`${s.pct}%`}}/></div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* Filter */}
-      <div className="rounded-2xl shadow-sm border border-slate-200 p-5 bg-white mb-4">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative w-56">
+      {/* Starta prov-kort */}
+      <div className="rounded-2xl shadow-sm border border-slate-200 p-5 bg-white">
+        <h3 className="text-sm font-semibold mb-3">Starta prov</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Avsnitt */}
+          <select className="px-3 py-2 rounded-xl border border-slate-300 text-sm"
+            value={app.filters.group} onChange={e=>setFilter("group", e.target.value)}>
+            <option value="all">Alla avsnitt</option>
+            {groups.map(g=><option key={g.id} value={g.id}>{g.title}</option>)}
+          </select>
+
+          {/* Typ */}
+          <select className="px-3 py-2 rounded-xl border border-slate-300 text-sm"
+            value={app.quiz.type} onChange={e=>setApp(s=>({...s, quiz:{...s.quiz, type:e.target.value}}))}>
+            <option value="mcq">Flervalsfrågor (MCQ)</option>
+            <option value="case">Case</option>
+            <option value="short">Kortfrågor</option>
+          </select>
+
+          {/* Antal */}
+          <select className="px-3 py-2 rounded-xl border border-slate-300 text-sm"
+            value={app.quiz.size} onChange={e=>setApp(s=>({...s, quiz:{...s.quiz, size:Number(e.target.value)}}))}>
+            {[10,15,20,25,30].map(n=><option key={n} value={n}>{n} frågor</option>)}
+          </select>
+
+          {/* Ordning */}
+          <select className="px-3 py-2 rounded-xl border border-slate-300 text-sm"
+            value={app.quiz.order} onChange={e=>setApp(s=>({...s, quiz:{...s.quiz, order:e.target.value}}))}>
+            <option value="random">Slumpmässig</option>
+            <option value="chronological">Kronologisk</option>
+          </select>
+
+          <button onClick={startQuiz} className="px-4 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 text-sm flex items-center gap-2">
+            <Timer className="w-4 h-4" /> Starta prov
+          </button>
+        </div>
+
+        <p className="text-xs text-slate-500 mt-2">
+          Autogradering gäller för MCQ. Case/Kortfrågor kan övas i provflödet och med facit/resonemang.
+        </p>
+      </div>
+
+      {/* Sök + lista (för övning utanför prov) */}
+      <div className="rounded-2xl shadow-sm border border-slate-200 p-5 bg-white">
+        <div className="flex items-center gap-2 flex-wrap mb-4">
+          <div className="relative w-64">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
             <input className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-400 text-sm"
               placeholder="Sök i frågor, svar, resonemang..."
               value={app.filters.query} onChange={e=>setFilter("query", e.target.value)} />
           </div>
           <select className="px-3 py-2 rounded-xl border border-slate-300 text-sm"
-            value={app.filters.group} onChange={e=>setFilter("group", e.target.value)}>
-            <option value="all">Alla avsnitt</option>
-            {groups.map(g=><option key={g.id} value={g.id}>{g.title}</option>)}
-          </select>
-          <select className="px-3 py-2 rounded-xl border border-slate-300 text-sm"
             value={app.filters.type} onChange={e=>setFilter("type", e.target.value)}>
             <option value="all">Alla typer</option>
             <option value="mcq">Flervalsfrågor</option>
+            <option value="case">Case</option>
             <option value="short">Kortfrågor</option>
-            <option value="case">Fallstudier</option>
           </select>
-          <button onClick={()=>setApp(s=>({...s,filters:{...s.filters, query:""}}))}
-            className="px-3 py-2 rounded-xl border border-slate-300 text-sm">Rensa filter</button>
+          <button onClick={()=>setFilter("query","")} className="px-3 py-2 rounded-xl border border-slate-300 text-sm flex items-center gap-1">
+            <Shuffle className="w-4 h-4"/> Rensa sök
+          </button>
         </div>
-      </div>
 
-      {/* Studie-kort */}
-      <div className="grid md:grid-cols-2 gap-5">
-        {filteredStudy.map(q => (
-          <StudyCard key={q.id} q={q}
-            reveal={app.reveal[q.id]||{answer:false,reasoning:false}}
-            done={!!app.completed[q.id]}
-            onReveal={key=>toggleReveal(q.id, key)}
-            onDone={val=>markDone(q.id, val)}
-            picked={app.mcqAnswers[q.id]}
-            onPick={(idx)=>answerMcq(q.id, idx)}
-          />
-        ))}
+        <div className="grid md:grid-cols-2 gap-5">
+          {filteredStudy.map(q => (
+            <StudyCard
+              key={q.id}
+              q={q}
+              reveal={app.reveal[q.id]||{answer:false,reasoning:false}}
+              done={!!app.completed[q.id]}
+              onReveal={(key)=>setApp(s=>({...s, reveal:{...s.reveal, [q.id]:{...(s.reveal[q.id]||{}), [key]:!(s.reveal[q.id]?.[key])}}}))}
+              onDone={(val)=>setApp(s=>({...s, completed:{...s.completed, [q.id]:val}}))}
+              picked={app.mcqAnswers[q.id]}
+              onPick={(idx)=>setApp(s=>({...s, mcqAnswers:{...s.mcqAnswers, [q.id]:idx}}))}
+            />
+          ))}
+        </div>
       </div>
     </motion.div>
   );
@@ -403,8 +473,8 @@ function StudyCard({ q, reveal, done, onReveal, onDone, picked, onPick }) {
   );
 }
 
-/** ---------- Provläge (en fråga i taget) ---------- */
-function QuizView({ app, quizQ, answerMcq, toggleReveal, goNext, goPrev, gradeQuiz, exitToStudy }) {
+/* ---------- Quiz: en fråga i taget ---------- */
+function QuizView({ app, quizQ, goNext, goPrev, exitToStudy, answerMcq, toggleReveal, gradeQuiz }) {
   if (!quizQ) return (
     <div className="rounded-2xl border border-slate-200 p-5 bg-white">
       <p>Inga frågor i provet.</p>
@@ -426,7 +496,7 @@ function QuizView({ app, quizQ, answerMcq, toggleReveal, goNext, goPrev, gradeQu
       <div className="flex items-center justify-between gap-2">
         <div className="text-sm text-slate-600">Fråga {idx+1} / {total} {app.quiz.reviewingWrongOnly && "• (Endast fel)"}</div>
         <div className="flex items-center gap-2">
-          <button onClick={exitToStudy} className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm flex items-center gap-1"><Home className="w-4 h-4"/> Översikt</button>
+          <button onClick={exitToStudy} className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm"><Home className="inline w-4 h-4 mr-1" /> Översikt</button>
         </div>
       </div>
 
@@ -446,40 +516,45 @@ function QuizView({ app, quizQ, answerMcq, toggleReveal, goNext, goPrev, gradeQu
                   showWrongSel ? "border-rose-300 bg-rose-50" :
                   selected ? "border-slate-300 bg-slate-50" : "border-slate-200"
                 }`}>
-                  <input type="radio" name={quizQ.id} className="mt-1 accent-slate-800"
-                    checked={selected||false} onChange={()=>answerMcq(quizQ.id, i)} disabled={graded} />
+                  <input
+                    type="radio"
+                    name={quizQ.id}
+                    className="mt-1 accent-slate-800"
+                    checked={selected||false}
+                    onChange={()=>answerMcq(quizQ.id, i)} // <- tillåter ändring även efter rättning
+                  />
                   <span>{opt}</span>
                 </label>
               );
             })}
           </div>
         ) : (
-          <div className="mt-3 text-sm text-slate-600"><em>Svara själv – facit visas efter rättning.</em></div>
+          <div className="mt-3 text-sm text-slate-600"><em>Svara själv – facit & resonemang kan öppnas nedan.</em></div>
         )}
 
-        {/* Facit/Resonemang efter rättning */}
-        {graded && (
-          <div className="mt-4 flex items-center gap-2 flex-wrap">
-            <button onClick={()=>toggleReveal(quizQ.id, "answer")} className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm">
-              { (app.reveal[quizQ.id]?.answer) ? "Dölj facit" : "Visa facit" }
-            </button>
-            <button onClick={()=>toggleReveal(quizQ.id, "reasoning")} className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm">
-              { (app.reveal[quizQ.id]?.reasoning) ? "Dölj resonemang" : "Visa resonemang" }
-            </button>
-          </div>
-        )}
+        {/* Facit/Resonemang-knappar (speciellt vid genomgång av fel) */}
+        <div className="mt-4 flex items-center gap-2 flex-wrap">
+          <button onClick={()=>toggleReveal(quizQ.id, "answer")} className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm">
+            {(app.reveal[quizQ.id]?.answer) ? "Dölj facit" : "Visa facit"}
+          </button>
+          <button onClick={()=>toggleReveal(quizQ.id, "reasoning")} className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm">
+            {(app.reveal[quizQ.id]?.reasoning) ? "Dölj resonemang" : "Visa resonemang"}
+          </button>
+          {!graded && app.quiz.type==="mcq" && (
+            <button onClick={gradeQuiz} className="px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-800 text-sm">Rätta</button>
+          )}
+        </div>
 
         <AnimatePresence>
-          {graded && app.reveal[quizQ.id]?.answer && (
+          {app.reveal[quizQ.id]?.answer && (
             <motion.div initial={{height:0,opacity:0}} animate={{height:"auto",opacity:1}} exit={{height:0,opacity:0}} className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
               <div className="font-medium mb-1">Facit</div>
               <div>{isMcq ? <span>Korrekt svar: <strong>{quizQ.options[quizQ.answerIndex]}</strong></span> : <span>{quizQ.answer}</span>}</div>
             </motion.div>
           )}
         </AnimatePresence>
-
         <AnimatePresence>
-          {graded && app.reveal[quizQ.id]?.reasoning && (
+          {app.reveal[quizQ.id]?.reasoning && (
             <motion.div initial={{height:0,opacity:0}} animate={{height:"auto",opacity:1}} exit={{height:0,opacity:0}} className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-sm">
               <div className="font-medium mb-1">Resonemang</div>
               <div className="text-slate-700">{quizQ.reasoning}</div>
@@ -488,18 +563,16 @@ function QuizView({ app, quizQ, answerMcq, toggleReveal, goNext, goPrev, gradeQu
         </AnimatePresence>
       </div>
 
-      {/* Navigering & åtgärder */}
+      {/* Navigering */}
       <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
         <button onClick={goPrev} disabled={idx===0} className="px-4 py-2 rounded-xl border border-slate-300 text-sm flex items-center gap-2 disabled:opacity-50">
           <ArrowLeft className="w-4 h-4" /> Föregående
         </button>
 
-        {!app.quiz.graded ? (
+        {app.quiz.type==="mcq" && !app.quiz.graded && (
           <button onClick={gradeQuiz} className="px-4 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 text-sm">
-            Rätta
+            Rätta allt
           </button>
-        ) : (
-          <div className="text-sm text-slate-600">Provet är rättat. Använd facit/resonemang och navigera mellan frågorna.</div>
         )}
 
         <button onClick={goNext} disabled={idx===total-1} className="px-4 py-2 rounded-xl border border-slate-300 text-sm flex items-center gap-2 disabled:opacity-50">
@@ -510,8 +583,8 @@ function QuizView({ app, quizQ, answerMcq, toggleReveal, goNext, goPrev, gradeQu
   );
 }
 
-/** ---------- Sammanfattning efter rättning ---------- */
-function SummaryView({ app, ALL_BY_ID, reviewWrong, reviewAllAgain, exitToStudy }) {
+/* ---------- Sammanfattning ---------- */
+function Summary({ app, reviewWrong, reviewAllAgain, exitToStudy }) {
   const total = app.quiz.ids.length;
   const wrong = app.quiz.incorrectIds.length;
   const right = total - wrong;
@@ -519,28 +592,30 @@ function SummaryView({ app, ALL_BY_ID, reviewWrong, reviewAllAgain, exitToStudy 
   return (
     <motion.div initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} className="rounded-2xl shadow-sm border border-slate-200 p-5 bg-white">
       <h2 className="text-xl font-semibold mb-1">Sammanfattning</h2>
-      <p className="text-slate-700 mb-4">{right} rätt • {wrong} fel av {total} frågor</p>
+      {app.quiz.type==="mcq" ? (
+        <p className="text-slate-700 mb-4">{right} rätt • {wrong} fel av {total} frågor</p>
+      ) : (
+        <p className="text-slate-700 mb-4">Prov av typ: {app.quiz.type.toUpperCase()}. Autogradering gäller inte – använd facit & resonemang.</p>
+      )}
 
-      {wrong>0 && (
+      {app.quiz.type==="mcq" && wrong>0 && (
         <div className="mb-4">
           <div className="text-sm font-medium mb-2">Felaktiga frågor</div>
           <ol className="list-decimal ml-6 space-y-1">
-            {app.quiz.incorrectIds.map(id => {
-              const q = ALL_BY_ID.get(id);
-              return <li key={id} className="text-sm">{q.id}: {q.q} <span className="text-slate-500">({q.groupTitle})</span></li>
-            })}
+            {app.quiz.incorrectIds.map(id => <li key={id} className="text-sm">{id}</li>)}
           </ol>
-          <div className="text-xs text-slate-500 mt-2">Tips: Välj “Gå igenom fel” så visas enbart de felaktiga med facit och resonemang.</div>
+          <div className="text-xs text-slate-500 mt-2">Klicka “Gå igenom fel” för att bara se de felaktiga med facit & resonemang öppna. Du kan ändra dina svar och sedan trycka “Rätta igen”.</div>
         </div>
       )}
 
       <div className="flex items-center gap-2 flex-wrap">
-        {wrong>0 && (
+        {app.quiz.type==="mcq" && wrong>0 && (
           <button onClick={reviewWrong} className="px-4 py-2 rounded-xl border border-rose-300 bg-rose-50 text-rose-800 text-sm flex items-center gap-2">
             <ListX className="w-4 h-4" /> Gå igenom fel
           </button>
         )}
-        <button onClick={reviewAllAgain} className="px-4 py-2 rounded-xl border border-slate-300 text-sm">Gör om alla provfrågor</button>
+        <button onClick={reviewAllAgain} className="px-4 py-2 rounded-xl border border-slate-300 text-sm">Gör om provet</button>
+        {/* Rätta igen: gå tillbaka till sammanfattningen efter att du ändrat svar i quiz-läget och klickat "Rätta allt" där. */}
         <button onClick={exitToStudy} className="px-4 py-2 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-800 text-sm">Till översikt</button>
       </div>
     </motion.div>
